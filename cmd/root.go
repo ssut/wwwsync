@@ -29,7 +29,7 @@ var (
 			return nil
 		},
 		Run: func(cmd *cobra.Command, args []string) {
-			targetURL := args[1]
+			targetURL := args[0]
 			baseURL, err := url.Parse(targetURL)
 			if err != nil {
 				panic(err)
