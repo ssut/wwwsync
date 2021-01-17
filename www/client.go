@@ -113,6 +113,7 @@ func (c *Client) RunFetchIndexesWorker(count int) {
 		if err != nil {
 			panic(err)
 		}
+		file.Truncate(0)
 
 		writer := bufio.NewWriter(file)
 		for {
@@ -281,7 +282,7 @@ func (c *Client) Start() error {
 		return err
 	}
 
-	// c.RunFetchIndexesWorker(c.Options.IndexFetchWorkerCount)
+	c.RunFetchIndexesWorker(c.Options.IndexFetchWorkerCount)
 	c.RunDownloadWorker(c.Options.DownloadWorkerCount)
 	return nil
 }
