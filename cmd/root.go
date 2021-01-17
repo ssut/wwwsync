@@ -16,8 +16,8 @@ const (
 )
 
 var (
-	indexFetchWorkerCount int
-	downloadWorkerCount   int
+	indexFetchWorkerCount int = DefaultIndexFetchWorkerCount
+	downloadWorkerCount   int = DefaultDownloadWorkerCount
 	targetDirectory       string
 
 	rootCmd = &cobra.Command{
