@@ -34,3 +34,5 @@
 out/
 
 .DS_Store
+
+.wwwsync-files.txt
