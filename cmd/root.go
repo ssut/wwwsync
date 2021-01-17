@@ -13,9 +13,10 @@ var (
 		Run: func(cmd *cobra.Command, args []string) {
 			baseURL, _ := url.Parse("https://dl-cdn.alpinelinux.org")
 			options := www.ClientOptions{
-				BaseURL:         *baseURL,
-				WorkerCount:     8,
-				TargetDirectory: "./out",
+				BaseURL:               *baseURL,
+				IndexFetchWorkerCount: 32,
+				DownloadWorkerCount:   8,
+				TargetDirectory:       "./out",
 			}
 			client := www.NewClient(options)
 			client.Start()

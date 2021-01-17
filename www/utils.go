@@ -6,16 +6,9 @@ import (
 	"net/url"
 	"path"
 	"strings"
-	"time"
 
 	"golang.org/x/net/html"
 )
-
-type File struct {
-	URL          url.URL
-	LastModified time.Time
-	Size         int64
-}
 
 func getHref(t html.Token) (ok bool, href string) {
 	// Iterate over all of the Token's attributes until we find an "href"
