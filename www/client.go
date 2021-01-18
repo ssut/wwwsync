@@ -52,7 +52,6 @@ func NewClient(options ClientOptions) Client {
 }
 
 func (c *Client) FetchIndexes(target url.URL) ([]string, []url.URL) {
-	fmt.Println("look:", target.String())
 	statusCode, body, err := c.httpClient.Get(nil, target.String())
 	if err != nil {
 		logger.Panic(err)
@@ -101,7 +100,7 @@ func (c *Client) fetchIndexesWorker(id int, wg *sync.WaitGroup, targetChan chan 
 func (c *Client) RunFetchIndexesWorker(count int) {
 	wg := &sync.WaitGroup{}
 	targetChan := make(chan url.URL, 102400)
-	reportChan := make(chan url.URL, 10240)
+	reportChan := make(chan url.URL, 102400)
 
 	for i := 0; i < count; i++ {
 		go c.fetchIndexesWorker(i, wg, targetChan, reportChan)
@@ -135,12 +134,66 @@ func (c *Client) RunFetchIndexesWorker(count int) {
 	wg.Add(1)
 	targetChan <- c.Options.BaseURL
 	wg.Wait()
+
+	for {
+		if len(reportChan) == 0 {
+			break
+		}
+
+		time.Sleep(200 * time.Millisecond)
+	}
+
 	close(targetChan)
+}
+
+func (c *Client) download(u *url.URL, targetPath string, bytesTotalChan chan<- int64, bytesRecvChan chan<- int64) error {
+	resp, err := http.Get(u.String())
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	size := resp.ContentLength
+	if c.Options.SkipExisting {
+		if f, err := os.Stat(targetPath); err == nil {
+			if size == f.Size() {
+				logger.WithFields(logrus.Fields{
+					"size": humanize.Bytes(uint64(size)),
+				}).Debugf("Skip: %s", u.Path)
+				return nil
+			}
+		}
+	}
+
+	bytesTotalChan <- size
+	reader := &ProxyReader{Reader: resp.Body}
+	reader.SetReadListener(func(diff int64) {
+		bytesRecvChan <- diff
+	})
+
+	out, err := os.Create(targetPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	started := time.Now()
+	_, err = io.Copy(out, reader)
+	if err != nil {
+		return err
+	}
+
+	elapsed := time.Since(started)
+	logger.WithFields(logrus.Fields{
+		"elapsed": elapsed.String(),
+		"size":    humanize.Bytes(uint64(size)),
+	}).Debugf("Downloaded: %s", u.Path)
+
+	return nil
 }
 
 func (c *Client) downloadWorker(wg *sync.WaitGroup, downloadChan chan url.URL, bytesTotalChan chan<- int64, bytesRecvChan chan<- int64, finishChan chan<- url.URL) {
 	targetDirectory := c.Options.TargetDirectory
-	skipExisting := c.Options.SkipExisting
 
 	for {
 		u, ok := <-downloadChan
@@ -148,60 +201,10 @@ func (c *Client) downloadWorker(wg *sync.WaitGroup, downloadChan chan url.URL, b
 			return
 		}
 
-		resp, err := http.Get(u.String())
-		if err != nil {
-			logger.Error(err)
-			finishChan <- u
-			wg.Done()
-			continue
-		}
-		defer resp.Body.Close()
-
 		targetPath := filepath.Join(targetDirectory, u.Path)
-
-		size := resp.ContentLength
-		if skipExisting {
-			if f, err := os.Stat(targetPath); err == nil {
-				if size == f.Size() {
-					logger.WithFields(logrus.Fields{
-						"size": humanize.Bytes(uint64(size)),
-					}).Debugf("File exists: %s", u.Path)
-					finishChan <- u
-					wg.Done()
-					continue
-				}
-			}
-		}
-
-		bytesTotalChan <- size
-		reader := &ProxyReader{Reader: resp.Body}
-		reader.SetReadListener(func(diff int64) {
-			bytesRecvChan <- diff
-		})
-
-		out, err := os.Create(targetPath)
-		if err != nil {
+		if err := c.download(&u, targetPath, bytesTotalChan, bytesRecvChan); err != nil {
 			logger.Error(err)
-			finishChan <- u
-			wg.Done()
-			continue
 		}
-		defer out.Close()
-
-		started := time.Now()
-		_, err = io.Copy(out, reader)
-		if err != nil {
-			logger.Error(err)
-			finishChan <- u
-			wg.Done()
-			continue
-		}
-
-		elapsed := time.Since(started)
-		logger.WithFields(logrus.Fields{
-			"elapsed": elapsed.String(),
-			"size":    humanize.Bytes(uint64(size)),
-		}).Debugf("Downloaded: %s", u.Path)
 		finishChan <- u
 		wg.Done()
 	}
@@ -256,7 +259,7 @@ func (c *Client) RunDownloadWorker(count int) {
 				bytesReceivedLast = bytesReceived
 				logger.WithFields(logrus.Fields{
 					"speed": fmt.Sprintf("%s/s", humanize.Bytes(diff)),
-				}).Infof("[%d/%d] %s/%s", finished, atomic.LoadUint64(total), humanize.Bytes(uint64(bytesReceived)), humanize.Bytes(uint64(bytesTotal)))
+				}).Infof("[%d/%d] %s/%s", finished, atomic.LoadUint64(total), humanize.SIWithDigits(float64(bytesReceived), 2, "B"), humanize.SIWithDigits(float64(bytesTotal), 2, "B"))
 				break
 			}
 		}
@@ -271,6 +274,14 @@ func (c *Client) RunDownloadWorker(count int) {
 	}
 
 	wg.Wait()
+	for {
+		if len(downloadChan) == 0 {
+			break
+		}
+
+		time.Sleep(200 * time.Millisecond)
+	}
+
 	close(downloadChan)
 	cancel()
 
@@ -278,6 +289,7 @@ func (c *Client) RunDownloadWorker(count int) {
 }
 
 func (c *Client) Start() error {
+	logger.Debug("verbose output is on")
 	if err := os.MkdirAll(c.Options.TargetDirectory, 0755); err != nil {
 		return err
 	}
