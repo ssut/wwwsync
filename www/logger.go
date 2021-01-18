@@ -11,3 +11,7 @@ func initLogger() {
 	formatter := new(prefixed.TextFormatter)
 	logger.Formatter = formatter
 }
+
+func SetLogLevel(level logrus.Level) {
+	logger.Level = level
+}
