@@ -14,14 +14,14 @@ const (
 	DefaultIndexFetchWorkerCount = 32
 	DefaultDownloadWorkerCount   = 8
 	DefaultTargetDirectory       = "out"
-	DefaultSkipExisting          = false
 )
 
 var (
 	indexFetchWorkerCount int    = DefaultIndexFetchWorkerCount
 	downloadWorkerCount   int    = DefaultDownloadWorkerCount
 	targetDirectory       string = DefaultTargetDirectory
-	skipExisting          bool   = DefaultSkipExisting
+	skipExistingNonZero   bool   = false
+	skipExistingSameSize  bool   = false
 	verbose                      = false
 
 	rootCmd = &cobra.Command{
@@ -41,6 +41,13 @@ var (
 			baseURL, err := url.Parse(targetURL)
 			if err != nil {
 				panic(err)
+			}
+
+			skipExisting := www.AlwaysDownload
+			if skipExistingSameSize {
+				skipExisting = www.SkipExistingSameSize
+			} else if skipExistingNonZero {
+				skipExisting = www.SkipExistingNonZero
 			}
 
 			options := www.ClientOptions{
@@ -68,5 +75,6 @@ func init() {
 	rootCmd.Flags().IntVarP(&indexFetchWorkerCount, "index-workers", "i", indexFetchWorkerCount, "Index fetch worker count")
 	rootCmd.Flags().IntVarP(&downloadWorkerCount, "download-workers", "d", downloadWorkerCount, "Download worker count")
 	rootCmd.Flags().StringVarP(&targetDirectory, "target-directory", "o", DefaultTargetDirectory, "Target output directory")
-	rootCmd.Flags().BoolVarP(&skipExisting, "skip-existing", "s", DefaultSkipExisting, "Skip existing files")
+	rootCmd.Flags().BoolVarP(&skipExistingNonZero, "skip-existing-non-zero", "", false, "Skip existing non-zero files")
+	rootCmd.Flags().BoolVarP(&skipExistingSameSize, "skip-existing-same-size", "", false, "Skip existing same-size files")
 }

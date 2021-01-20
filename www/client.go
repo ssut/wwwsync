@@ -19,12 +19,20 @@ import (
 	"github.com/valyala/fasthttp"
 )
 
+type SkipExistingType = int
+
+const (
+	AlwaysDownload = iota
+	SkipExistingNonZero
+	SkipExistingSameSize
+)
+
 type ClientOptions struct {
 	BaseURL               url.URL
 	IndexFetchWorkerCount int
 	DownloadWorkerCount   int
 	TargetDirectory       string
-	SkipExisting          bool
+	SkipExisting          SkipExistingType
 }
 
 type Client struct {
@@ -51,7 +59,7 @@ func NewClient(options ClientOptions) Client {
 	return client
 }
 
-func (c *Client) FetchIndexes(target url.URL) ([]string, []url.URL) {
+func (c *Client) FetchIndexes(target url.URL) ([]string, []*IndexFile) {
 	statusCode, body, err := c.httpClient.Get(nil, target.String())
 	if err != nil {
 		logger.Panic(err)
@@ -72,7 +80,7 @@ func (c *Client) FetchIndexes(target url.URL) ([]string, []url.URL) {
 	return getURLs(target.String(), body)
 }
 
-func (c *Client) fetchIndexesWorker(id int, wg *sync.WaitGroup, targetChan chan url.URL, reportChan chan<- url.URL) {
+func (c *Client) fetchIndexesWorker(id int, wg *sync.WaitGroup, targetChan chan url.URL, reportChan chan<- IndexFile) {
 	for {
 		target, ok := <-targetChan
 		if !ok {
@@ -83,14 +91,14 @@ func (c *Client) fetchIndexesWorker(id int, wg *sync.WaitGroup, targetChan chan 
 		path := filepath.Join(c.Options.TargetDirectory, target.Path)
 		os.MkdirAll(path, 0755)
 
-		dirs, files := c.FetchIndexes(target)
+		dirs, indexFiles := c.FetchIndexes(target)
 		for _, dir := range dirs {
 			next := url.URL{Scheme: target.Scheme, Host: target.Host, RawQuery: target.RawQuery, Path: dir}
 			wg.Add(1)
 			targetChan <- next
 		}
-		for _, file := range files {
-			reportChan <- file
+		for _, indexFile := range indexFiles {
+			reportChan <- *indexFile
 		}
 
 		wg.Done()
@@ -100,13 +108,13 @@ func (c *Client) fetchIndexesWorker(id int, wg *sync.WaitGroup, targetChan chan 
 func (c *Client) RunFetchIndexesWorker(count int) {
 	wg := &sync.WaitGroup{}
 	targetChan := make(chan url.URL, 102400)
-	reportChan := make(chan url.URL, 102400)
+	reportChan := make(chan IndexFile, 102400)
 
 	for i := 0; i < count; i++ {
 		go c.fetchIndexesWorker(i, wg, targetChan, reportChan)
 	}
 
-	go func(outDir string, reportChan <-chan url.URL) {
+	go func(outDir string, reportChan <-chan IndexFile) {
 		logPath := filepath.Join(outDir, ".wwwsync-files.txt")
 		file, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
@@ -117,14 +125,14 @@ func (c *Client) RunFetchIndexesWorker(count int) {
 		writer := bufio.NewWriter(file)
 		for {
 			select {
-			case url, ok := <-reportChan:
+			case indexFile, ok := <-reportChan:
 				if !ok {
 					writer.Flush()
 					file.Close()
 					return
 				}
 
-				writer.WriteString(url.String() + "\n")
+				writer.WriteString(indexFile.URL.String() + "\n")
 				writer.Flush()
 				break
 			}
@@ -147,6 +155,18 @@ func (c *Client) RunFetchIndexesWorker(count int) {
 }
 
 func (c *Client) download(u *url.URL, targetPath string, bytesTotalChan chan<- int64, bytesRecvChan chan<- int64) error {
+	if c.Options.SkipExisting == SkipExistingNonZero {
+		if f, err := os.Stat(targetPath); err == nil {
+			fSize := f.Size()
+			if f.Size() > 0 {
+				logger.WithFields(logrus.Fields{
+					"size": humanize.Bytes(uint64(fSize)),
+				}).Debugf("Skip: %s", u.Path)
+				return nil
+			}
+		}
+	}
+
 	resp, err := http.Get(u.String())
 	if err != nil {
 		return err
@@ -154,7 +174,7 @@ func (c *Client) download(u *url.URL, targetPath string, bytesTotalChan chan<- i
 	defer resp.Body.Close()
 
 	size := resp.ContentLength
-	if c.Options.SkipExisting {
+	if c.Options.SkipExisting == SkipExistingSameSize {
 		if f, err := os.Stat(targetPath); err == nil {
 			if size == f.Size() {
 				logger.WithFields(logrus.Fields{
